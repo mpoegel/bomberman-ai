@@ -1,5 +1,11 @@
 package main
 
+/*
+ * Bomberman AI
+ *
+ * author: Matt Poegel
+ */
+
 import (
 	"encoding/json"
 	"fmt"
