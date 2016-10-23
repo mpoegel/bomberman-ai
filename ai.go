@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -11,9 +13,27 @@ import (
 
 const serverURL = "http://upe21.cs.rpi.edu:3000/api/"
 
-// Strategy defines approach to choosing the next move
+// Strategy defines approach for choosing the next move
 type Strategy interface {
-	execute()
+	Execute(*Message) string
+}
+
+// Message defines the structure of responses from the game server
+type Message struct {
+	HardBlockBoard []int       `json:"hardBlockBoard"`
+	BoardSize      int         `json:"boardSize"`
+	GameID         string      `json:"gameID"`
+	BombMap        interface{} `json:"bombMap"`
+	MoveIterator   int         `json:"moveIterator"`
+	PlayerID       string      `json:"playerID"`
+	PortalMap      interface{} `json:"portalMap"`
+	PlayerIndex    int         `json:"playerIndex"`
+	TrailMap       interface{} `json:"trailMap"`
+	Player         interface{} `json:"player"`
+	State          string      `json:"state"`
+	SoftBlockBoard []int       `json:"softBlockBoard"`
+	MoveOrder      []int       `json:"moveOrder"`
+	Opponent       interface{} `json:"opponent"`
 }
 
 // Player encapsulates the user's credentials
@@ -49,19 +69,46 @@ func NewPlayer(credentialFile *string) *Player {
 	return p
 }
 
-// PracticeGame joins a practice game and begins making moves using the given strategy
-func PracticeGame(player *Player, strategy *Strategy) {
-	resp, err := http.PostForm(serverURL+"games/search",
-		url.Values{"devKey": {player.DevKey}, "username": {player.Username}})
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
+func decodeResponse(resp *http.Response) Message {
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(string(body))
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	var msg Message
+	if err := dec.Decode(&msg); err != nil {
+		log.Print(string(body))
+		panic(err)
+	}
+	return msg
+}
+
+// PracticeGame joins a practice game and begins making moves using the given strategy
+func PracticeGame(player *Player, strategy Strategy) {
+	resp, err := http.PostForm(serverURL+"games/practice",
+		url.Values{"devkey": {player.DevKey}, "username": {player.Username}})
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	msg := decodeResponse(resp)
+	log.Printf("Joined game: %s\n", msg.GameID)
+	log.Printf("PlayerID: %s\n", msg.PlayerID)
+	for {
+		move := strategy.Execute(&msg)
+		log.Printf("Move: %s\n", move)
+		resp, err := http.PostForm(serverURL+"games/submit/"+msg.GameID,
+			url.Values{"devkey": {player.DevKey}, "playerID": {msg.PlayerID}, "move": {move}})
+		if err != nil {
+			panic(err)
+		}
+		defer resp.Body.Close()
+		msg := decodeResponse(resp)
+		if msg.State == "complete" {
+			break
+		}
+	}
+	log.Printf("Game over\n")
 }
 
 func main() {
@@ -70,7 +117,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: go run ai.go <credential_file>\n")
 		os.Exit(1)
 	}
-	player := newPlayer(&args[1])
-	fmt.Printf("Loaded credentials for %s\n", player.Username)
+	player := NewPlayer(&args[1])
+	log.Printf("Loaded credentials for: %s\n", player.Username)
+	strategy := NewSuicideStrategy()
+	log.Printf("Using strategy: %s\n", strategy.name)
 
+	PracticeGame(player, strategy)
 }
